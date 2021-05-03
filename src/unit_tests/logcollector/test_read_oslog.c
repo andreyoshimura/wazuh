@@ -21,13 +21,15 @@
 #include "../wrappers/libc/stdio_wrappers.h"
 #include "../wrappers/linux/socket_wrappers.h"
 #include "../wrappers/wazuh/shared/expression_wrappers.h"
+#include "../wrappers/wazuh/logcollector/logcollector_wrappers.h"
 
 bool oslog_ctxt_restore(char * buffer, w_oslog_ctxt_t * ctxt);
 void oslog_ctxt_backup(char * buffer, w_oslog_ctxt_t * ctxt);
 void oslog_ctxt_clean(w_oslog_ctxt_t * ctxt);
 bool oslog_ctxt_is_expired(time_t timeout, w_oslog_ctxt_t * ctxt);
 char * oslog_get_valid_lastline(char * str);
-bool oslog_header_check(w_oslog_config_t * oslog_cfg, char * buffer);
+bool oslog_getlog(char * buffer, int length, FILE * stream, w_oslog_config_t * oslog_cfg);
+bool oslog_is_header(w_oslog_config_t * oslog_cfg, char * buffer);
 
 /* setup/teardown */
 
@@ -45,6 +47,9 @@ static int group_teardown(void ** state) {
 
 /* wraps */
 
+int __wrap_can_read() {
+    return mock_type(int);
+}
 
 /* tests */
 
@@ -251,6 +256,156 @@ void test_oslog_get_valid_lastline_str_with_three_new_lines_not_end(void ** stat
 
 }
 
+/* oslog_is_header */
+
+void test_oslog_is_header_success(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("test", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = false;
+
+    will_return(__wrap_w_expression_match, true);
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_false(ret);
+
+    os_free(buffer);
+
+}
+
+void test_oslog_is_header_log_stream_execution_error_after_exec(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("log: test", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = true;
+
+    will_return(__wrap_w_expression_match, false);
+
+    expect_string(__wrap__merror, formatted_msg, "(1602): Execution error 'log: test'");
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_true(ret);
+
+    os_free(buffer);
+
+}
+
+void test_oslog_is_header_log_stream_execution_error_colon(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("log: ", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = true;
+
+    will_return(__wrap_w_expression_match, false);
+
+    expect_string(__wrap__merror, formatted_msg, "(1602): Execution error 'log'");
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_true(ret);
+
+    os_free(buffer);
+
+}
+
+void test_oslog_is_header_log_stream_execution_error_line_break(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("log: test\n", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = true;
+
+    will_return(__wrap_w_expression_match, false);
+
+    expect_string(__wrap__merror, formatted_msg, "(1602): Execution error 'log: test'");
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_true(ret);
+
+    os_free(buffer);
+
+}
+
+void test_oslog_is_header_reading_other_log(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("test", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = false;
+
+    will_return(__wrap_w_expression_match, false);
+
+    expect_string(__wrap__mdebug2, formatted_msg, "Reading other log headers or errors: 'test'");
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_true(ret);
+
+    os_free(buffer);
+
+}
+
+void test_oslog_is_header_reading_other_log_line_break(void ** state) {
+
+    w_oslog_ctxt_t ctxt;
+    strncpy(ctxt.buffer,"test\n",OS_MAXSTR);
+
+    char * buffer = NULL;
+    os_strdup("test\n", buffer);
+
+    w_oslog_config_t oslog_cfg;
+    oslog_cfg.ctxt = ctxt;
+    oslog_cfg.start_log_regex = NULL;
+    oslog_cfg.is_header_processed = false;
+
+    will_return(__wrap_w_expression_match, false);
+
+    expect_string(__wrap__mdebug2, formatted_msg, "Reading other log headers or errors: 'test'");
+
+    bool ret = oslog_is_header(& oslog_cfg, buffer);
+
+    assert_true(ret);
+
+    os_free(buffer);
+
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         // Test oslog_ctxt_restore
@@ -272,6 +427,13 @@ int main(void) {
         cmocka_unit_test(test_oslog_get_valid_lastline_str_with_two_new_lines_end),
         cmocka_unit_test(test_oslog_get_valid_lastline_str_with_two_new_lines_not_end),
         cmocka_unit_test(test_oslog_get_valid_lastline_str_with_three_new_lines_not_end),
+        // Test oslog_is_header
+        cmocka_unit_test(test_oslog_is_header_success),
+        cmocka_unit_test(test_oslog_is_header_log_stream_execution_error_after_exec),
+        cmocka_unit_test(test_oslog_is_header_log_stream_execution_error_colon),
+        cmocka_unit_test(test_oslog_is_header_log_stream_execution_error_line_break),
+        cmocka_unit_test(test_oslog_is_header_reading_other_log),
+        cmocka_unit_test(test_oslog_is_header_reading_other_log_line_break),
     };
 
     return cmocka_run_group_tests(tests, group_setup, group_teardown);
